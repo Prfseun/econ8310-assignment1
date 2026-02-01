@@ -1,43 +1,58 @@
 import pandas as pd
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import numpy as np
+from pathlib import Path
+from pygam import LinearGAM, s
 
-# ----------------------------
-# 1) Load data
-# ----------------------------
-train_url = "https://github.com/dustywhite7/econ8310-assignment1/raw/main/assignment_data_train.csv"
-test_url  = "https://github.com/dustywhite7/econ8310-assignment1/raw/main/assignment_data_test.csv"
+# -----------------------------
+# Paths (your files are in the project root)
+# -----------------------------
+BASE_DIR = Path.cwd()
+train_path = BASE_DIR / "assignment_data_train.csv"
+test_path  = BASE_DIR / "assignment_data_test.csv"
+out_path   = BASE_DIR / "predictions_pygam.csv"   # output file
 
-train = pd.read_csv(train_url)
-test  = pd.read_csv(test_url)
+# -----------------------------
+# Load data from local files (NOT GitHub)
+# -----------------------------
+train_data = pd.read_csv(train_path)
+test_data  = pd.read_csv(test_path)
 
-# ----------------------------
-# 2) Prepare time series
-# ----------------------------
-train["Timestamp"] = pd.to_datetime(train["Timestamp"])
-train = train.sort_values("Timestamp").set_index("Timestamp")
+# -----------------------------
+# Date handling
+# -----------------------------
+train_data["Timestamp"] = pd.to_datetime(train_data["Timestamp"])
+test_data["Timestamp"]  = pd.to_datetime(test_data["Timestamp"])
 
-# enforce hourly frequency
-train = train.asfreq("h")
+# Feature engineering
+for df in (train_data, test_data):
+    df["day_of_week"] = df["Timestamp"].dt.weekday + 1  # Mon=1 ... Sun=7
+    df["hour"] = df["Timestamp"].dt.hour
+    df["month"] = df["Timestamp"].dt.month
 
-train["trips"] = pd.to_numeric(train["trips"], errors="coerce")
-train = train.dropna(subset=["trips"])
+# -----------------------------
+# Train model
+# -----------------------------
+X_train = train_data[["month", "day_of_week", "hour"]].values
+y_train = train_data["trips"].values
 
-y = train["trips"]
+# GAM with smooth terms for each feature
+model = LinearGAM(s(0) + s(1) + s(2)).gridsearch(X_train, y_train)
 
-# ----------------------------
-# 3) Holt-Winters Model
-# ----------------------------
-model = ExponentialSmoothing(
-    y,
-    trend="add",
-    seasonal="mul",          # 🔥 THIS IS THE KEY CHANGE
-    seasonal_periods=168,    # weekly seasonality
-    initialization_method="estimated"
-)
+# -----------------------------
+# Predict on test set
+# -----------------------------
+X_test = test_data[["month", "day_of_week", "hour"]].values
+test_data["trips"] = model.predict(X_test)
 
-modelFit = model.fit(optimized=True)
+# Predictions array (like your friend had)
+pred = test_data["trips"].values
 
-# ----------------------------
-# 4) Forecast January (744 hours)
-# ----------------------------
-pred = modelFit.forecast(744)
+# -----------------------------
+# Save predictions
+# -----------------------------
+# If your class expects just a single "trips" column:
+submission = pd.DataFrame({"trips": pred})
+submission.to_csv(out_path, index=False)
+
+print("Saved predictions to:", out_path)
+print(submission.head())
