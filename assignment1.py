@@ -47,12 +47,3 @@ test_data["trips"] = model.predict(X_test)
 # Predictions array (like your friend had)
 pred = test_data["trips"].values
 
-# -----------------------------
-# Save predictions
-# -----------------------------
-# If your class expects just a single "trips" column:
-submission = pd.DataFrame({"trips": pred})
-submission.to_csv(out_path, index=False)
-
-print("Saved predictions to:", out_path)
-print(submission.head())
