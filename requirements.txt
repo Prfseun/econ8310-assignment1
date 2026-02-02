@@ -1,9 +1,7 @@
-statsmodels 
-pandas 
-numpy 
-pygam 
-prophet 
-ipynb
+statsmodels
+pandas
 numpy
 scipy
-plotly
+prophet
+cmdstanpy
+
