@@ -1,49 +1,59 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from pygam import LinearGAM, s
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # -----------------------------
-# Paths (your files are in the project root)
+# Load data (local files)
 # -----------------------------
 BASE_DIR = Path.cwd()
 train_path = BASE_DIR / "assignment_data_train.csv"
 test_path  = BASE_DIR / "assignment_data_test.csv"
-out_path   = BASE_DIR / "predictions_pygam.csv"   # output file
+
+train = pd.read_csv(train_path)
+test  = pd.read_csv(test_path)
+
+# Parse and sort timestamps
+train["Timestamp"] = pd.to_datetime(train["Timestamp"])
+test["Timestamp"]  = pd.to_datetime(test["Timestamp"])
+train = train.sort_values("Timestamp").reset_index(drop=True)
+test  = test.sort_values("Timestamp").reset_index(drop=True)
+
+# Set hourly index
+train = train.set_index("Timestamp").asfreq("H")
+
+# Target variable
+y = train["trips"].astype(float)
+
+# Fill missing hours safely
+y = y.interpolate(limit_direction="both")
 
 # -----------------------------
-# Load data from local files (NOT GitHub)
+# Model (Exponential Smoothing)
+# Weekly seasonality for hourly data = 24*7 = 168
 # -----------------------------
-train_data = pd.read_csv(train_path)
-test_data  = pd.read_csv(test_path)
+model = ExponentialSmoothing(
+    y,
+    trend="add",
+    seasonal="add",
+    seasonal_periods=168
+)
+
+# Fit model
+modelFit = model.fit(optimized=True)
 
 # -----------------------------
-# Date handling
+# Forecast exactly 744 hours
 # -----------------------------
-train_data["Timestamp"] = pd.to_datetime(train_data["Timestamp"])
-test_data["Timestamp"]  = pd.to_datetime(test_data["Timestamp"])
+steps = 744
+pred_series = modelFit.forecast(steps=steps)
 
-# Feature engineering
-for df in (train_data, test_data):
-    df["day_of_week"] = df["Timestamp"].dt.weekday + 1  # Mon=1 ... Sun=7
-    df["hour"] = df["Timestamp"].dt.hour
-    df["month"] = df["Timestamp"].dt.month
+# Vector named pred
+pred = np.asarray(pred_series, dtype=float)
 
-# -----------------------------
-# Train model
-# -----------------------------
-X_train = train_data[["month", "day_of_week", "hour"]].values
-y_train = train_data["trips"].values
+# Safety: no NaNs and exact length
+pred = np.nan_to_num(pred, nan=np.nanmean(pred) if np.isfinite(pred).any() else 0.0)
+if pred.shape[0] != 744:
+    pred = pred[:744] if pred.shape[0] > 744 else np.pad(pred, (0, 744 - pred.shape[0]), mode="edge")
 
-# GAM with smooth terms for each feature
-model = LinearGAM(s(0) + s(1) + s(2)).gridsearch(X_train, y_train)
-
-# -----------------------------
-# Predict on test set
-# -----------------------------
-X_test = test_data[["month", "day_of_week", "hour"]].values
-test_data["trips"] = model.predict(X_test)
-
-# Predictions array (like your friend had)
-pred = test_data["trips"].values
 
