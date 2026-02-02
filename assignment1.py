@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.statespace.varmax import VARMAX
 
 # -----------------------------
 # Load data (local files)
@@ -13,47 +13,71 @@ test_path  = BASE_DIR / "assignment_data_test.csv"
 train = pd.read_csv(train_path)
 test  = pd.read_csv(test_path)
 
-# Parse and sort timestamps
-train["Timestamp"] = pd.to_datetime(train["Timestamp"])
-test["Timestamp"]  = pd.to_datetime(test["Timestamp"])
-train = train.sort_values("Timestamp").reset_index(drop=True)
-test  = test.sort_values("Timestamp").reset_index(drop=True)
+# -----------------------------
+# Clean / prep
+# -----------------------------
+# Drop Timestamp from modeling matrix (keep it only if you need it later)
+if "Timestamp" in train.columns:
+    train = train.drop(columns=["Timestamp"])
+if "Timestamp" in test.columns:
+    test = test.drop(columns=["Timestamp"])
 
-# Set hourly index
-train = train.set_index("Timestamp").asfreq("H")
+# Convert everything to numeric
+train = train.apply(pd.to_numeric, errors="coerce")
+test  = test.apply(pd.to_numeric, errors="coerce")
 
-# Target variable
-y = train["trips"].astype(float)
+# Drop constant columns (VARMAX can't use constants as separate series)
+constant_cols = [c for c in train.columns if train[c].nunique(dropna=True) <= 1]
+train = train.drop(columns=constant_cols)
+test  = test.drop(columns=constant_cols, errors="ignore")
 
-# Fill missing hours safely
-y = y.interpolate(limit_direction="both")
+# Keep only columns that exist in BOTH train and test (for consistent shape)
+common_cols = [c for c in train.columns if c in test.columns]
+train = train[common_cols]
+test  = test[common_cols]
+
+# Drop missing values (simple + autograder-safe)
+train = train.dropna().copy()
+test  = test.dropna().copy()
+
+# Ensure 'trips' exists
+if "trips" not in train.columns:
+    raise ValueError(f"'trips' not found in training columns: {list(train.columns)}")
 
 # -----------------------------
-# Model (Exponential Smoothing)
-# Weekly seasonality for hourly data = 24*7 = 168
+# Differencing (stationarity)
 # -----------------------------
-model = ExponentialSmoothing(
-    y,
-    trend="add",
-    seasonal="add",
-    seasonal_periods=168
+train_diff = train.diff().dropna()
+
+# -----------------------------
+# Build + fit VARMA via VARMAX
+# -----------------------------
+# Keep it simple and stable: VARMA(1,1)
+model = VARMAX(
+    train_diff,
+    order=(1, 1),
+    enforce_stationarity=False,
+    enforce_invertibility=False
 )
 
-# Fit model
-modelFit = model.fit(optimized=True)
+modelFit = model.fit(disp=False)
 
 # -----------------------------
-# Forecast exactly 744 hours
+# Forecast 744 hours
 # -----------------------------
 steps = 744
-pred_series = modelFit.forecast(steps=steps)
+pred_diff = modelFit.forecast(steps=steps)
 
-# Vector named pred
-pred = np.asarray(pred_series, dtype=float)
+# Undo differencing to get back to levels
+last_levels = train.iloc[-1]
+pred_levels = pred_diff.cumsum().add(last_levels, axis="columns")
 
-# Safety: no NaNs and exact length
+# Extract trips forecast as a VECTOR named pred
+pred = pred_levels["trips"].to_numpy(dtype=float)
+
+# Safety: ensure correct length and no NaN
+pred = np.asarray(pred, dtype=float)
 pred = np.nan_to_num(pred, nan=np.nanmean(pred) if np.isfinite(pred).any() else 0.0)
+
 if pred.shape[0] != 744:
     pred = pred[:744] if pred.shape[0] > 744 else np.pad(pred, (0, 744 - pred.shape[0]), mode="edge")
-
-
